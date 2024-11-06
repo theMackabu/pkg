@@ -1,0 +1,34 @@
+[env]
+patch_dir = "../patches"
+branch = "release/v1.22"
+repo = "https://github.com/go-gitea/gitea"
+
+[project]
+name = "pkg.ci"
+version = "0.2.1"
+
+[tasks]
+clean.script = "rm -rf gitea"
+clone.script = [
+   "maid clean -q",
+   "git clone -b %{env.branch} --depth 1 --single-branch %{env.repo}"
+]
+
+[tasks.patch]
+path = "gitea"
+depends = ["clone"]
+script = "git apply --reject --whitespace=nowarn %{env.patch_dir}/gitea.patch"
+
+[tasks.build]
+path = "gitea"
+depends = ["patch"]
+script = "bash -c 'TAGS=\"bindata sqlite sqlite_unlock_notify\" make build'"
+
+[tasks.install]
+path = "gitea"
+script = [
+   "service gitea stop",
+   "cp gitea /home/gitea",
+   "service gitea start",
+   "rm gitea"
+]
