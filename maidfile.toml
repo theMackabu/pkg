@@ -17,7 +17,10 @@ clone.script = [
 [tasks.patch]
 path = "gitea"
 depends = ["clone"]
-script = "git apply --reject --whitespace=nowarn %{env.patch_dir}/gitea.patch"
+script = [
+   "git apply --reject --whitespace=nowarn %{env.patch_dir}/gitea.patch",
+   "git apply --reject --whitespace=nowarn %{env.patch_dir}/navbar.patch"
+]
 
 [tasks.build]
 path = "gitea"

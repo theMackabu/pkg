@@ -1,0 +1,1076 @@
+From 34e2ea0bb0f23e23d819981739a8af82ba118c6b Mon Sep 17 00:00:00 2001
+From: theMackabu <theMackabu@gmail.com>
+Date: Wed, 6 Nov 2024 21:06:00 -0800
+Subject: [PATCH] update fixed navbars
+
+---
+ models/user/user.go                           |   2 +-
+ routers/web/explore/repo.go                   |  44 ++++-
+ routers/web/org/home.go                       |  27 +++
+ routers/web/user/home.go                      |  22 ++-
+ routers/web/user/package.go                   |  30 +++-
+ routers/web/user/profile.go                   |  20 +++
+ templates/base/head_navbar.tmpl               |   4 +-
+ templates/explore/navbar.tmpl                 | 114 +++++++++++--
+ templates/explore/search.tmpl                 |   1 -
+ templates/explore/users.tmpl                  |   2 +-
+ templates/package/settings.tmpl               |   2 +-
+ templates/package/shared/list.tmpl            |  18 --
+ templates/package/shared/selflist.tmpl        |  13 ++
+ templates/package/shared/versionlist.tmpl     |   2 +-
+ templates/package/view.tmpl                   |   4 +-
+ templates/user/dashboard/dashboard.tmpl       |   2 +-
+ templates/user/dashboard/feeds.tmpl           | 127 ---------------
+ templates/user/dashboard/issues.tmpl          |  80 ---------
+ templates/user/dashboard/milestones.tmpl      | 154 ------------------
+ templates/user/dashboard/navbar.tmpl          |   2 +-
+ templates/user/dashboard/repolist.tmpl        |  59 -------
+ templates/user/overview/package_versions.tmpl |   2 +-
+ 22 files changed, 259 insertions(+), 472 deletions(-)
+ delete mode 100644 templates/user/dashboard/feeds.tmpl
+ delete mode 100644 templates/user/dashboard/issues.tmpl
+ delete mode 100644 templates/user/dashboard/milestones.tmpl
+ delete mode 100644 templates/user/dashboard/repolist.tmpl
+
+diff --git a/models/user/user.go b/models/user/user.go
+index cff83702c7..3cea9d25bc 100644
+--- a/models/user/user.go
++++ b/models/user/user.go
+@@ -559,7 +559,7 @@ var (
+ 		"swagger.v1.json",
+ 		"user",
+ 		"v2",
+-		"gitea-actions",
++		"cargo",
+ 	}
+ 
+ 	// DON'T ADD ANY NEW STUFF, WE SOLVE THIS WITH `/user/{obj}` PATHS!
+diff --git a/routers/web/explore/repo.go b/routers/web/explore/repo.go
+index e41e94dbb5..092dc4565a 100644
+--- a/routers/web/explore/repo.go
++++ b/routers/web/explore/repo.go
+@@ -7,20 +7,16 @@ import (
+ 	"net/http"
+ 
+ 	"code.gitea.io/gitea/models/db"
+-	packages_model "code.gitea.io/gitea/models/packages"
+-	access_model "code.gitea.io/gitea/models/perm/access"
+ 	"code.gitea.io/gitea/modules/base"
+ 	"code.gitea.io/gitea/modules/setting"
+ 	"code.gitea.io/gitea/modules/optional"
+ 	"code.gitea.io/gitea/services/context"
+-)
++	"code.gitea.io/gitea/models/packages"
+ 
+-const (
+-	tplExplorePkgs         base.TplName = "explore/packages"
+-	relevantReposOnlyParam string       = "only_show_relevant"
++	packages_model "code.gitea.io/gitea/models/packages"
++	access_model "code.gitea.io/gitea/models/perm/access"
+ )
+ 
+-// RepoSearchOptions when calling search repositories
+ type RepoSearchOptions struct {
+ 	Private          bool
+ 	Restricted       bool
+@@ -29,9 +25,23 @@ type RepoSearchOptions struct {
+ 	TplName          base.TplName
+ }
+ 
++const (
++	tplExplorePkgs         base.TplName = "explore/packages"
++	relevantReposOnlyParam string       = "only_show_relevant"
++)
++
++const (
++	SortVersionAsc  packages.VersionSort = ""
++	SortVersionDesc packages.VersionSort = "version_desc"
++	SortNameAsc     packages.VersionSort = "name_asc"
++	SortNameDesc    packages.VersionSort = "name_desc"
++)
++
+ // RenderRepoSearch render repositories search page
+ // This function is also used to render the Admin Repository Management page.
+-func RenderRepoSearch(ctx *context.Context, opts *RepoSearchOptions) {
++func RenderRepoSearch(ctx *context.Context, opts *RepoSearchOptions) {	
++	var orderBy packages.VersionSort
++	
+ 	page := int(ctx.ParamsInt64("idx"))
+ 	
+ 	if page <= 1 {
+@@ -45,11 +55,29 @@ func RenderRepoSearch(ctx *context.Context, opts *RepoSearchOptions) {
+ 	query := ctx.FormTrim("q")
+ 	packageType := ctx.FormTrim("type")
+ 	
++	sortOrder := ctx.FormString("sort")
++	ctx.Data["SortType"] = sortOrder
++
++	switch sortOrder {
++		case "recent_update":
++			orderBy = SortVersionAsc
++		case "old_update":
++			orderBy = SortVersionDesc
++		case "asc":
++			orderBy = SortNameAsc
++		case "desc":
++			orderBy = SortNameDesc
++		default:
++			orderBy = SortVersionAsc
++			ctx.Data["SortType"] = "recent_update"
++	}
++	
+ 	pvs, total, err := packages_model.SearchLatestVersions(ctx, &packages_model.PackageSearchOptions{
+ 		Paginator: &db.ListOptions{
+ 			PageSize: setting.UI.PackagesPagingNum,
+ 			Page:     page,
+ 		},
++		Sort:       orderBy,
+ 		Type:       packages_model.Type(packageType),
+ 		Name:       packages_model.SearchValue{Value: query},
+ 		IsInternal: optional.Some(false),
+diff --git a/routers/web/org/home.go b/routers/web/org/home.go
+index f49bf3b36a..278c8342c0 100644
+--- a/routers/web/org/home.go
++++ b/routers/web/org/home.go
+@@ -30,8 +30,17 @@ const (
+ 	tplOrgHome base.TplName = "org/home"
+ )
+ 
++const (
++	SortVersionAsc  packages_model.VersionSort = ""
++	SortVersionDesc packages_model.VersionSort = "version_desc"
++	SortNameAsc     packages_model.VersionSort = "name_asc"
++	SortNameDesc    packages_model.VersionSort = "name_desc"
++)
++
+ // Home show organization home page
+ func Home(ctx *context.Context) {
++	var orderBy packages_model.VersionSort
++	
+ 	uname := ctx.Params(":username")
+ 
+ 	if strings.HasSuffix(uname, ".keys") || strings.HasSuffix(uname, ".gpg") {
+@@ -57,11 +66,29 @@ func Home(ctx *context.Context) {
+ 	query := ctx.FormTrim("q")
+ 	packageType := ctx.FormTrim("type")
+ 	
++	sortOrder := ctx.FormString("sort")
++	ctx.Data["SortType"] = sortOrder
++	
++	switch sortOrder {
++		case "recent_update":
++			orderBy = SortVersionAsc
++		case "old_update":
++			orderBy = SortVersionDesc
++		case "asc":
++			orderBy = SortNameAsc
++		case "desc":
++			orderBy = SortNameDesc
++		default:
++			orderBy = SortVersionAsc
++			ctx.Data["SortType"] = "recent_update"
++	}
++	
+ 	pvs, total, err := packages_model.SearchLatestVersions(ctx, &packages_model.PackageSearchOptions{
+ 		Paginator: &db.ListOptions{
+ 			PageSize: setting.UI.PackagesPagingNum,
+ 			Page:     page,
+ 		},
++		Sort:       orderBy,
+ 		OwnerID:    ctx.ContextUser.ID,
+ 		Type:       packages_model.Type(packageType),
+ 		Name:       packages_model.SearchValue{Value: query},
+diff --git a/routers/web/user/home.go b/routers/web/user/home.go
+index fec01c5331..3a399de140 100644
+--- a/routers/web/user/home.go
++++ b/routers/web/user/home.go
+@@ -28,8 +28,6 @@ import (
+ 
+ const (
+ 	tplDashboard  base.TplName = "user/dashboard/dashboard"
+-	tplIssues     base.TplName = "user/dashboard/issues"
+-	tplMilestones base.TplName = "user/dashboard/milestones"
+ 	tplProfile    base.TplName = "user/profile"
+ )
+ 
+@@ -55,6 +53,8 @@ func getDashboardContextUser(ctx *context.Context) *user_model.User {
+ 
+ // Dashboard render the dashboard page
+ func Dashboard(ctx *context.Context) {
++	var orderBy packages_model.VersionSort
++	
+ 	ctxUser := getDashboardContextUser(ctx)
+ 	if ctx.Written() {
+ 		return
+@@ -66,10 +66,27 @@ func Dashboard(ctx *context.Context) {
+ 		query = ctx.FormTrim("q")
+ 		packageType = ctx.FormTrim("type")
+ 	)
++	
++	sortOrder := ctx.FormString("sort")
++	ctx.Data["SortType"] = sortOrder	
+ 
+ 	if page <= 1 {
+ 		page = 1
+ 	}
++	
++	switch sortOrder {
++		case "recent_update":
++			orderBy = SortVersionAsc
++		case "old_update":
++			orderBy = SortVersionDesc
++		case "asc":
++			orderBy = SortNameAsc
++		case "desc":
++			orderBy = SortNameDesc
++		default:
++			orderBy = SortVersionAsc
++			ctx.Data["SortType"] = "recent_update"
++	}
+ 
+ 	ctx.Data["Title"] = ctxUser.DisplayName() + " - " + ctx.Locale.TrString("dashboard")
+ 	ctx.Data["PageIsDashboard"] = true
+@@ -82,6 +99,7 @@ func Dashboard(ctx *context.Context) {
+ 			PageSize: setting.UI.PackagesPagingNum,
+ 			Page:     page,
+ 		},
++		Sort:       orderBy,
+ 		OwnerID:    ctxUser.ID,
+ 		Type:       packages_model.Type(packageType),
+ 		Name:       packages_model.SearchValue{Value: query},
+diff --git a/routers/web/user/package.go b/routers/web/user/package.go
+index b5769dc3ac..4d044e32e8 100644
+--- a/routers/web/user/package.go
++++ b/routers/web/user/package.go
+@@ -38,21 +38,49 @@ const (
+ 	tplPackagesSettings   base.TplName = "package/settings"
+ )
+ 
++const (
++	SortVersionAsc  packages_model.VersionSort = ""
++	SortVersionDesc packages_model.VersionSort = "version_desc"
++	SortNameAsc     packages_model.VersionSort = "name_asc"
++	SortNameDesc    packages_model.VersionSort = "name_desc"
++)
++
+ // ListPackages displays a list of all packages of the context user
+ func ListPackages(ctx *context.Context) {
++	var orderBy packages_model.VersionSort
++	
+ 	shared_user.PrepareContextForProfileBigAvatar(ctx)
++	
+ 	page := ctx.FormInt("page")
+ 	if page <= 1 {
+ 		page = 1
+ 	}
+ 	query := ctx.FormTrim("q")
+ 	packageType := ctx.FormTrim("type")
+-
++	
++	sortOrder := ctx.FormString("sort")
++	ctx.Data["SortType"] = sortOrder
++	
++	switch sortOrder {
++		case "recent_update":
++			orderBy = SortVersionAsc
++		case "old_update":
++			orderBy = SortVersionDesc
++		case "asc":
++			orderBy = SortNameAsc
++		case "desc":
++			orderBy = SortNameDesc
++		default:
++			orderBy = SortVersionAsc
++			ctx.Data["SortType"] = "recent_update"
++	}
++		
+ 	pvs, total, err := packages_model.SearchLatestVersions(ctx, &packages_model.PackageSearchOptions{
+ 		Paginator: &db.ListOptions{
+ 			PageSize: setting.UI.PackagesPagingNum,
+ 			Page:     page,
+ 		},
++		Sort:       orderBy,
+ 		OwnerID:    ctx.ContextUser.ID,
+ 		Type:       packages_model.Type(packageType),
+ 		Name:       packages_model.SearchValue{Value: query},
+diff --git a/routers/web/user/profile.go b/routers/web/user/profile.go
+index a5d6c4cd1c..66d2fc7a7e 100644
+--- a/routers/web/user/profile.go
++++ b/routers/web/user/profile.go
+@@ -51,6 +51,8 @@ func userProfile(ctx *context.Context) {
+ }
+ 
+ func prepareUserProfileTabData(ctx *context.Context) {
++	var orderBy packages_model.VersionSort
++	
+ 	page := ctx.FormInt("page")
+ 	if page <= 1 {
+ 		page = 1
+@@ -59,11 +61,29 @@ func prepareUserProfileTabData(ctx *context.Context) {
+ 	query := ctx.FormTrim("q")
+ 	packageType := ctx.FormTrim("type")
+ 	
++	sortOrder := ctx.FormString("sort")
++	ctx.Data["SortType"] = sortOrder
++	
++	switch sortOrder {
++		case "recent_update":
++			orderBy = SortVersionAsc
++		case "old_update":
++			orderBy = SortVersionDesc
++		case "asc":
++			orderBy = SortNameAsc
++		case "desc":
++			orderBy = SortNameDesc
++		default:
++			orderBy = SortVersionAsc
++			ctx.Data["SortType"] = "recent_update"
++	}
++	
+ 	pvs, total, err := packages_model.SearchLatestVersions(ctx, &packages_model.PackageSearchOptions{
+ 		Paginator: &db.ListOptions{
+ 			PageSize: setting.UI.PackagesPagingNum,
+ 			Page:     page,
+ 		},
++		Sort:       orderBy,
+ 		OwnerID:    ctx.ContextUser.ID,
+ 		Type:       packages_model.Type(packageType),
+ 		Name:       packages_model.SearchValue{Value: query},
+diff --git a/templates/base/head_navbar.tmpl b/templates/base/head_navbar.tmpl
+index 4ebd8fb725..fb5ed384bb 100644
+--- a/templates/base/head_navbar.tmpl
++++ b/templates/base/head_navbar.tmpl
+@@ -3,7 +3,7 @@
+ 	{{$notificationUnreadCount = call .NotificationUnreadCount}}
+ {{end}}
+ 
+-<nav id="navbar" aria-label="{{ctx.Locale.Tr "aria.navbar"}}">
++<nav id="navbar" style="position:fixed;z-index:90;width:100%" aria-label="{{ctx.Locale.Tr "aria.navbar"}}">
+ 	<div class="navbar-left">
+ 		<!-- the logo -->
+ 		<a class="logo tw-mx-3" id="navbar-logo" href="{{AppSubUrl}}/" aria-label="{{if .IsSigned}}{{ctx.Locale.Tr "dashboard"}}{{else}}{{ctx.Locale.Tr "home"}}{{end}}">
+@@ -138,3 +138,5 @@
+ 		{{end}}
+ 	</div><!-- end full right menu -->
+ </nav>
++
++<div style="padding-top:66px;" id="fixed-padding-fix"></div>
+\ No newline at end of file
+diff --git a/templates/explore/navbar.tmpl b/templates/explore/navbar.tmpl
+index c2d6b231ef..9cdbafe5cf 100644
+--- a/templates/explore/navbar.tmpl
++++ b/templates/explore/navbar.tmpl
+@@ -1,16 +1,106 @@
++<style>	
++	.nav-container.fixed {
++		position: sticky;
++		left: 0;
++		right: 0;
++		z-index: 30;
++		background-color: var(--color-body) !important;
++	}
++	
++	.nav-spacer {
++		height: 60px;
++		display: none;
++	}
++	
++	.nav-spacer.visible {
++		display: block;
++	}
++	
++	.drop-shadow {
++		margin-bottom: 1px !important;
++		filter: drop-shadow(0 4px 3px rgb(0 0 0 / 0.07)) drop-shadow(0 2px 2px rgb(0 0 0 / 0.06));
++	}
++</style>
++
+ <div class="hero center">
+ 	<img class="logo tw-m-6" width="220" src="{{AssetUrlPrefix}}/img/logo_large.png" />
+ </div>
+-<overflow-menu class="ui secondary pointing tabular menu">
+-	<div class="overflow-menu-items tw-justify-center">
+-		<a class="{{if .IsPackagesPageExplore}}active {{end}}item" href="{{AppSubUrl}}/explore/packages">
+-			{{svg "octicon-repo"}} {{ctx.Locale.Tr "explore.repos"}}
+-		</a>
+-		<a class="{{if .PageIsExploreUsers}}active {{end}}item" href="{{AppSubUrl}}/explore/users">
+-			{{svg "octicon-person"}} {{ctx.Locale.Tr "explore.users"}}
+-		</a>
+-		<a class="{{if .PageIsExploreOrganizations}}active {{end}}item" href="{{AppSubUrl}}/explore/organizations">
+-			{{svg "octicon-organization"}} {{ctx.Locale.Tr "explore.organizations"}}
+-		</a>
++
++<div class="ui nav-container" id="nav-container" data-top-offset="50">
++	<overflow-menu class="ui secondary pointing tabular menu">
++		<div class="overflow-menu-items tw-justify-center">
++			<a class="{{if .IsPackagesPageExplore}}active {{end}}item" href="{{AppSubUrl}}/explore/packages">
++				{{svg "octicon-repo"}} {{ctx.Locale.Tr "explore.repos"}}
++			</a>
++			<a class="{{if .PageIsExploreUsers}}active {{end}}item" href="{{AppSubUrl}}/explore/users">
++				{{svg "octicon-person"}} {{ctx.Locale.Tr "explore.users"}}
++			</a>
++			<a class="{{if .PageIsExploreOrganizations}}active {{end}}item" href="{{AppSubUrl}}/explore/organizations">
++				{{svg "octicon-organization"}} {{ctx.Locale.Tr "explore.organizations"}}
++			</a>
++		</div>
++	</overflow-menu>
++	
++	<div class="ui container2 mobile-margin">
++		{{if .HasPackages}}
++		<div class="ui small secondary filter menu tw-items-center tw-mx-0">
++			<form class="ui form ignore-dirty tw-flex-1">
++				<div class="ui small fluid action input">
++					<input type="search" name="q" value="{{.Query}}" maxlength="255" spellcheck="false" placeholder="Search all packages...">
++					<select class="ui small dropdown" name="type">
++						<option value="">All Types</option>
++						<option value="all">All Types</option>
++						{{range $type := .AvailableTypes}}
++						<option{{if eq $.PackageType $type}} selected="selected"{{end}} value="{{$type}}">{{$type.Name}}</option>
++						{{end}}
++					</select>
++					{{template "shared/search/button"}}
++				</div>
++			</form>
++			<!-- Sort -->
++			<div class="ui small dropdown type jump item tw-mr-0">
++				<span class="text">
++					{{ctx.Locale.Tr "repo.issues.filter_sort"}}
++				</span>
++				{{svg "octicon-triangle-down" 14 "dropdown icon"}}
++				<div class="menu">
++					<a class="{{if eq .SortType "recent_update"}}active {{end}}item" href="?sort=recent_update&q={{$.Query}}">Recently Updated</a>
++					<a class="{{if eq .SortType "old_update"}}active {{end}}item" href="?sort=old_update&q={{$.Query}}">Oldest Updated</a>
++					<a class="{{if eq .SortType "asc"}}active {{end}}item" href="?sort=asc&q={{$.Query}}">{{ctx.Locale.Tr "repo.issues.label.filter_sort.alphabetically"}}</a>
++					<a class="{{if eq .SortType "desc"}}active {{end}}item" href="?sort=desc&q={{$.Query}}">{{ctx.Locale.Tr "repo.issues.label.filter_sort.reverse_alphabetically"}}</a>
++				</div>
++			</div>
++		</div>
++		{{else}}
++			{{template "explore/search" .}}
++		{{end}}
++		<div class="divider drop-shadow"></div>
+ 	</div>
+-</overflow-menu>
++</div>
++
++<div class="nav-spacer" id="nav-spacer"></div>
++
++<script>
++	const navContainers = document.querySelectorAll('.nav-container');
++	const navSpacers = document.querySelectorAll('.nav-spacer');
++
++	const navInfo = Array.from(navContainers).map(container => ({
++		offsetTop: container.offsetTop,
++		topValue: parseInt(container.dataset.topOffset || '0')
++	}));
++
++	window.addEventListener('scroll', () => {
++		const pageYOffset = window.pageYOffset;
++		navContainers.forEach((container, index) => {
++			if (pageYOffset >= navInfo[index].offsetTop) {
++				container.classList.add('fixed');
++				container.style.top = `${navInfo[index].topValue}px`;
++				navSpacers[index]?.classList.add('visible');
++			} else {
++				container.classList.remove('fixed');
++				container.style.top = '';
++				navSpacers[index]?.classList.remove('visible');
++			}
++		});
++	});
++</script>
+\ No newline at end of file
+diff --git a/templates/explore/search.tmpl b/templates/explore/search.tmpl
+index 1d984a2e37..d3e8c6b124 100644
+--- a/templates/explore/search.tmpl
++++ b/templates/explore/search.tmpl
+@@ -20,4 +20,3 @@
+ 		</div>
+ 	</div>
+ </div>
+-<div class="divider"></div>
+diff --git a/templates/explore/users.tmpl b/templates/explore/users.tmpl
+index 31c2b70c3d..7759ed05a4 100644
+--- a/templates/explore/users.tmpl
++++ b/templates/explore/users.tmpl
+@@ -1,6 +1,6 @@
+ {{template "base/head" .}}
+ <div role="main" aria-label="{{.Title}}" class="page-content explore users">
+ 	{{template "explore/navbar" .}}
+-	<div class="ui container2 mobile-margin">{{template "explore/search" .}} {{template "explore/user_list" .}} {{template "base/paginate" .}}</div>
++	<div class="ui container2 mobile-margin">{{template "explore/user_list" .}} {{template "base/paginate" .}}</div>
+ </div>
+ {{template "base/footer" .}}
+diff --git a/templates/package/settings.tmpl b/templates/package/settings.tmpl
+index c58fac6a51..02f45c47d9 100644
+--- a/templates/package/settings.tmpl
++++ b/templates/package/settings.tmpl
+@@ -1,5 +1,5 @@
+ {{template "base/head" .}}
+-<div class="secondary-nav tw-border-b tw-border-b-secondary container-margin">
++<div class="secondary-nav tw-border-b tw-border-b-secondary container-margin" style="margin-top:-16px;">
+ 	<div class="ui secondary menu tw-py-3">
+ 		<a href="/explore/packages" class="orange-link">Explore</a>
+ 		<span class="tw-mx-3" style="color: #788796">/</span>
+diff --git a/templates/package/shared/list.tmpl b/templates/package/shared/list.tmpl
+index eefe83d17c..e46929f319 100644
+--- a/templates/package/shared/list.tmpl
++++ b/templates/package/shared/list.tmpl
+@@ -1,22 +1,4 @@
+ {{template "base/alert" .}}
+-{{if .HasPackages}}
+-<div class="ui small secondary filter menu tw-items-center tw-mx-0">
+-<form class="ui form ignore-dirty tw-flex-1">
+-	<div class="ui small fluid action input">
+-		<input type="search" name="q" value="{{.Query}}" maxlength="255" spellcheck="false" placeholder="Search all packages...">
+-		<select class="ui small dropdown" name="type">
+-			<option value="">{{ctx.Locale.Tr "packages.filter.type"}}</option>
+-			<option value="all">{{ctx.Locale.Tr "packages.filter.type.all"}}</option>
+-			{{range $type := .AvailableTypes}}
+-			<option{{if eq $.PackageType $type}} selected="selected"{{end}} value="{{$type}}">{{$type.Name}}</option>
+-			{{end}}
+-		</select>
+-		{{template "shared/search/button"}}
+-	</div>
+-</form>
+-</div>
+-<div class="divider"></div>
+-{{end}}
+ 
+ <div class="flex-list">
+ 	{{range .PackageDescriptors}}
+diff --git a/templates/package/shared/selflist.tmpl b/templates/package/shared/selflist.tmpl
+index 6b1f82225c..509924a80a 100644
+--- a/templates/package/shared/selflist.tmpl
++++ b/templates/package/shared/selflist.tmpl
+@@ -14,6 +14,19 @@
+       {{template "shared/search/button"}}
+    </div>
+ </form>
++<!-- Sort -->
++<div class="ui small dropdown type jump item tw-mr-0">
++   <span class="text">
++      {{ctx.Locale.Tr "repo.issues.filter_sort"}}
++   </span>
++   {{svg "octicon-triangle-down" 14 "dropdown icon"}}
++   <div class="menu">
++      <a class="{{if eq .SortType "recent_update"}}active {{end}}item" href="?sort=recent_update&q={{$.Query}}">Recently Updated</a>
++      <a class="{{if eq .SortType "old_update"}}active {{end}}item" href="?sort=old_update&q={{$.Query}}">Oldest Updated</a>
++      <a class="{{if eq .SortType "asc"}}active {{end}}item" href="?sort=asc&q={{$.Query}}">{{ctx.Locale.Tr "repo.issues.label.filter_sort.alphabetically"}}</a>
++      <a class="{{if eq .SortType "desc"}}active {{end}}item" href="?sort=desc&q={{$.Query}}">{{ctx.Locale.Tr "repo.issues.label.filter_sort.reverse_alphabetically"}}</a>
++   </div>
++</div>
+ </div>
+ <div class="divider"></div>
+ {{end}}
+diff --git a/templates/package/shared/versionlist.tmpl b/templates/package/shared/versionlist.tmpl
+index 54666ce4d8..d2226109f6 100644
+--- a/templates/package/shared/versionlist.tmpl
++++ b/templates/package/shared/versionlist.tmpl
+@@ -1,4 +1,4 @@
+-<form class="ui form ignore-dirty">
++<form class="ui form ignore-dirty" style="padding-top:26px;">
+ 	<div class="ui small fluid action input">
+ 		{{template "shared/search/input" dict "Value" .Query "Placeholder" (ctx.Locale.Tr "search.package_kind")}}
+ 		<select class="ui small dropdown" name="sort">
+diff --git a/templates/package/view.tmpl b/templates/package/view.tmpl
+index c6d817ab55..ad3fc3e196 100644
+--- a/templates/package/view.tmpl
++++ b/templates/package/view.tmpl
+@@ -1,5 +1,5 @@
+ {{template "base/head" .}}
+-<div class="secondary-nav tw-border-b tw-border-b-secondary container-margin">
++<div class="secondary-nav tw-border-b tw-border-b-secondary container-margin" style="position:fixed;z-index:20;width:100%;margin-top:-16px;">
+ 	<div class="ui secondary menu tw-py-3">
+ 		<a href="/explore/packages" class="orange-link">Explore</a>
+ 		<span class="tw-mx-3" style="color: #788796">/</span>
+@@ -15,7 +15,7 @@
+ 	</div>
+ </div>
+ 
+-<div role="main" aria-label="{{.Title}}" class="page-content repository view issue packages">
++<div role="main" aria-label="{{.Title}}" class="page-content repository view issue packages" style="padding-top:25px;">
+ 	<div class="ui container">
+ 		<div class="issue-title-header">
+ 			<div class="issue-title" style="margin-bottom: -5px !important">
+diff --git a/templates/user/dashboard/dashboard.tmpl b/templates/user/dashboard/dashboard.tmpl
+index 1d704a1677..54d065e202 100644
+--- a/templates/user/dashboard/dashboard.tmpl
++++ b/templates/user/dashboard/dashboard.tmpl
+@@ -1,7 +1,7 @@
+ {{template "base/head" .}}
+ <div role="main" aria-label="{{.Title}}" class="page-content dashboard feeds">
+ 	{{template "user/dashboard/navbar" .}}
+-	<div class="ui container flex-container">
++	<div class="ui container flex-container" style="padding-top:26px;">
+ 		<div class="flex-container-main">{{template "package/shared/selflist" .}}</div>
+ 	</div>
+ </div>
+diff --git a/templates/user/dashboard/feeds.tmpl b/templates/user/dashboard/feeds.tmpl
+deleted file mode 100644
+index 60aa194534..0000000000
+--- a/templates/user/dashboard/feeds.tmpl
++++ /dev/null
+@@ -1,127 +0,0 @@
+-<div id="activity-feed" class="flex-list">
+-	{{range .Feeds}}
+-		<div class="flex-item">
+-			<div class="flex-item-leading">
+-				{{ctx.AvatarUtils.AvatarByAction .}}
+-			</div>
+-			<div class="flex-item-main tw-gap-2">
+-				<div>
+-					{{if gt .ActUser.ID 0}}
+-						<a href="{{AppSubUrl}}/{{(.GetActUserName ctx) | PathEscape}}" title="{{.GetActDisplayNameTitle ctx}}">{{.GetActDisplayName ctx}}</a>
+-					{{else}}
+-						{{.ShortActUserName ctx}}
+-					{{end}}
+-					{{if .GetOpType.InActions "create_repo"}}
+-						{{ctx.Locale.Tr "action.create_repo" (.GetRepoLink ctx) (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "rename_repo"}}
+-						{{ctx.Locale.Tr "action.rename_repo" .GetContent (.GetRepoLink ctx) (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "commit_repo"}}
+-						{{if .Content}}
+-							{{ctx.Locale.Tr "action.commit_repo" (.GetRepoLink ctx) (.GetRefLink ctx) .GetBranch (.ShortRepoPath ctx)}}
+-						{{else}}
+-							{{ctx.Locale.Tr "action.create_branch" (.GetRepoLink ctx) (.GetRefLink ctx) .GetBranch (.ShortRepoPath ctx)}}
+-						{{end}}
+-					{{else if .GetOpType.InActions "create_issue"}}
+-						{{$index := index .GetIssueInfos 0}}
+-						{{ctx.Locale.Tr "action.create_issue" (printf "%s/issues/%s" (.GetRepoLink ctx) $index) $index (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "create_pull_request"}}
+-						{{$index := index .GetIssueInfos 0}}
+-						{{ctx.Locale.Tr "action.create_pull_request" (printf "%s/pulls/%s" (.GetRepoLink ctx) $index) $index (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "transfer_repo"}}
+-						{{ctx.Locale.Tr "action.transfer_repo" .GetContent (.GetRepoLink ctx) (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "push_tag"}}
+-						{{ctx.Locale.Tr "action.push_tag" (.GetRepoLink ctx) (.GetRefLink ctx) .GetTag (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "comment_issue"}}
+-						{{$index := index .GetIssueInfos 0}}
+-						{{ctx.Locale.Tr "action.comment_issue" (printf "%s/issues/%s" (.GetRepoLink ctx) $index) $index (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "merge_pull_request"}}
+-						{{$index := index .GetIssueInfos 0}}
+-						{{ctx.Locale.Tr "action.merge_pull_request" (printf "%s/pulls/%s" (.GetRepoLink ctx) $index) $index (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "close_issue"}}
+-						{{$index := index .GetIssueInfos 0}}
+-						{{ctx.Locale.Tr "action.close_issue" (printf "%s/issues/%s" (.GetRepoLink ctx) $index) $index (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "reopen_issue"}}
+-						{{$index := index .GetIssueInfos 0}}
+-						{{ctx.Locale.Tr "action.reopen_issue" (printf "%s/issues/%s" (.GetRepoLink ctx) $index) $index (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "close_pull_request"}}
+-						{{$index := index .GetIssueInfos 0}}
+-						{{ctx.Locale.Tr "action.close_pull_request" (printf "%s/pulls/%s" (.GetRepoLink ctx) $index) $index (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "reopen_pull_request"}}
+-						{{$index := index .GetIssueInfos 0}}
+-						{{ctx.Locale.Tr "action.reopen_pull_request" (printf "%s/pulls/%s" (.GetRepoLink ctx) $index) $index (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "delete_tag"}}
+-						{{$index := index .GetIssueInfos 0}}
+-						{{ctx.Locale.Tr "action.delete_tag" (.GetRepoLink ctx) .GetTag (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "delete_branch"}}
+-						{{$index := index .GetIssueInfos 0}}
+-						{{ctx.Locale.Tr "action.delete_branch" (.GetRepoLink ctx) .GetBranch (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "mirror_sync_push"}}
+-						{{ctx.Locale.Tr "action.mirror_sync_push" (.GetRepoLink ctx) (.GetRefLink ctx) .GetBranch (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "mirror_sync_create"}}
+-						{{ctx.Locale.Tr "action.mirror_sync_create" (.GetRepoLink ctx) (.GetRefLink ctx) .GetBranch (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "mirror_sync_delete"}}
+-						{{ctx.Locale.Tr "action.mirror_sync_delete" (.GetRepoLink ctx) .GetBranch (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "approve_pull_request"}}
+-						{{$index := index .GetIssueInfos 0}}
+-						{{ctx.Locale.Tr "action.approve_pull_request" (printf "%s/pulls/%s" (.GetRepoLink ctx) $index) $index (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "reject_pull_request"}}
+-						{{$index := index .GetIssueInfos 0}}
+-						{{ctx.Locale.Tr "action.reject_pull_request" (printf "%s/pulls/%s" (.GetRepoLink ctx) $index) $index (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "comment_pull"}}
+-						{{$index := index .GetIssueInfos 0}}
+-						{{ctx.Locale.Tr "action.comment_pull" (printf "%s/pulls/%s" (.GetRepoLink ctx) $index) $index (.ShortRepoPath ctx)}}
+-					{{else if .GetOpType.InActions "publish_release"}}
+-						{{$linkText := .Content | RenderEmoji $.Context}}
+-						{{ctx.Locale.Tr "action.publish_release" (.GetRepoLink ctx) (printf "%s/releases/tag/%s" (.GetRepoLink ctx) .GetTag) (.ShortRepoPath ctx) $linkText}}
+-					{{else if .GetOpType.InActions "review_dismissed"}}
+-						{{$index := index .GetIssueInfos 0}}
+-						{{$reviewer := index .GetIssueInfos 1}}
+-						{{ctx.Locale.Tr "action.review_dismissed" (printf "%s/pulls/%s" (.GetRepoLink ctx) $index) $index (.ShortRepoPath ctx) $reviewer}}
+-					{{end}}
+-					{{TimeSince .GetCreate ctx.Locale}}
+-				</div>
+-				{{if .GetOpType.InActions "commit_repo" "mirror_sync_push"}}
+-					{{$push := ActionContent2Commits .}}
+-					{{$repoLink := (.GetRepoLink ctx)}}
+-					{{$repo := .Repo}}
+-					<div class="tw-flex tw-flex-col tw-gap-1">
+-						{{range $push.Commits}}
+-							{{$commitLink := printf "%s/commit/%s" $repoLink .Sha1}}
+-							<div class="flex-text-block">
+-								<img class="ui avatar" src="{{$push.AvatarLink $.Context .AuthorEmail}}" title="{{.AuthorName}}" width="16" height="16">
+-								<a class="ui sha label" href="{{$commitLink}}">{{ShortSha .Sha1}}</a>
+-								<span class="text truncate">
+-									{{RenderCommitMessage $.Context .Message ($repo.ComposeMetas ctx)}}
+-								</span>
+-							</div>
+-						{{end}}
+-					</div>
+-					{{if and (gt $push.Len 1) $push.CompareURL}}
+-						<a href="{{AppSubUrl}}/{{$push.CompareURL}}">{{ctx.Locale.Tr "action.compare_commits" $push.Len}} »</a>
+-					{{end}}
+-				{{else if .GetOpType.InActions "create_issue"}}
+-					<span class="text truncate issue title">{{index .GetIssueInfos 1 | RenderEmoji $.Context | RenderCodeBlock}}</span>
+-				{{else if .GetOpType.InActions "create_pull_request"}}
+-					<span class="text truncate issue title">{{index .GetIssueInfos 1 | RenderEmoji $.Context | RenderCodeBlock}}</span>
+-				{{else if .GetOpType.InActions "comment_issue" "approve_pull_request" "reject_pull_request" "comment_pull"}}
+-					<a href="{{.GetCommentLink ctx}}" class="text truncate issue title">{{(.GetIssueTitle ctx) | RenderEmoji $.Context | RenderCodeBlock}}</a>
+-					{{$comment := index .GetIssueInfos 1}}
+-					{{if $comment}}
+-						<div class="markup tw-text-14">{{RenderMarkdownToHtml ctx $comment}}</div>
+-					{{end}}
+-				{{else if .GetOpType.InActions "merge_pull_request"}}
+-					<div class="flex-item-body text black">{{index .GetIssueInfos 1}}</div>
+-				{{else if .GetOpType.InActions "close_issue" "reopen_issue" "close_pull_request" "reopen_pull_request"}}
+-					<span class="text truncate issue title">{{(.GetIssueTitle ctx) | RenderEmoji $.Context | RenderCodeBlock}}</span>
+-				{{else if .GetOpType.InActions "pull_review_dismissed"}}
+-				<div class="flex-item-body text black">{{ctx.Locale.Tr "action.review_dismissed_reason"}}</div>
+-				<div class="flex-item-body text black">{{index .GetIssueInfos 2 | RenderEmoji $.Context}}</div>
+-				{{end}}
+-			</div>
+-			<div class="flex-item-trailing">
+-				{{svg (printf "octicon-%s" (ActionIcon .GetOpType)) 32 "text grey tw-mr-1"}}
+-			</div>
+-		</div>
+-	{{end}}
+-	{{template "base/paginate" .}}
+-</div>
+diff --git a/templates/user/dashboard/issues.tmpl b/templates/user/dashboard/issues.tmpl
+deleted file mode 100644
+index b47a21e87c..0000000000
+--- a/templates/user/dashboard/issues.tmpl
++++ /dev/null
+@@ -1,80 +0,0 @@
+-{{template "base/head" .}}
+-<div role="main" aria-label="{{.Title}}" class="page-content dashboard issues">
+-	{{template "user/dashboard/navbar" .}}
+-	<div class="ui container">
+-		{{template "base/alert" .}}
+-		<div class="flex-container">
+-			<div class="flex-container-nav">
+-				<div class="ui secondary vertical filter menu tw-bg-transparent">
+-					<a class="{{if eq .ViewType "your_repositories"}}active{{end}} item" href="?type=your_repositories&sort={{$.SortType}}&state={{.State}}&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">
+-						{{ctx.Locale.Tr "home.issues.in_your_repos"}}
+-						<strong>{{CountFmt .IssueStats.YourRepositoriesCount}}</strong>
+-					</a>
+-					<a class="{{if eq .ViewType "assigned"}}active{{end}} item" href="?type=assigned&sort={{$.SortType}}&state={{.State}}&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">
+-						{{ctx.Locale.Tr "repo.issues.filter_type.assigned_to_you"}}
+-						<strong>{{CountFmt .IssueStats.AssignCount}}</strong>
+-					</a>
+-					<a class="{{if eq .ViewType "created_by"}}active{{end}} item" href="?type=created_by&sort={{$.SortType}}&state={{.State}}&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">
+-						{{ctx.Locale.Tr "repo.issues.filter_type.created_by_you"}}
+-						<strong>{{CountFmt .IssueStats.CreateCount}}</strong>
+-					</a>
+-					{{if .PageIsPulls}}
+-						<a class="{{if eq .ViewType "review_requested"}}active{{end}} item" href="?type=review_requested&sort={{$.SortType}}&state={{.State}}&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">
+-							{{ctx.Locale.Tr "repo.issues.filter_type.review_requested"}}
+-							<strong>{{CountFmt .IssueStats.ReviewRequestedCount}}</strong>
+-						</a>
+-						<a class="{{if eq .ViewType "reviewed_by"}}active{{end}} item" href="?type=reviewed_by&sort={{$.SortType}}&state={{.State}}&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">
+-							{{ctx.Locale.Tr "repo.issues.filter_type.reviewed_by_you"}}
+-							<strong>{{CountFmt .IssueStats.ReviewedCount}}</strong>
+-						</a>
+-					{{end}}
+-					<a class="{{if eq .ViewType "mentioned"}}active{{end}} item" href="?type=mentioned&sort={{$.SortType}}&state={{.State}}&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">
+-						{{ctx.Locale.Tr "repo.issues.filter_type.mentioning_you"}}
+-						<strong>{{CountFmt .IssueStats.MentionCount}}</strong>
+-					</a>
+-				</div>
+-			</div>
+-			<div class="flex-container-main content">
+-				<div class="list-header">
+-					<div class="small-menu-items ui compact tiny menu list-header-toggle">
+-						<a class="item{{if not .IsShowClosed}} active{{end}}" href="?type={{$.ViewType}}&sort={{$.SortType}}&state=open&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">
+-							{{svg "octicon-issue-opened" 16 "tw-mr-2"}}
+-							{{ctx.Locale.PrettyNumber .IssueStats.OpenCount}}&nbsp;{{ctx.Locale.Tr "repo.issues.open_title"}}
+-						</a>
+-						<a class="item{{if .IsShowClosed}} active{{end}}" href="?type={{$.ViewType}}&sort={{$.SortType}}&state=closed&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">
+-							{{svg "octicon-issue-closed" 16 "tw-mr-2"}}
+-							{{ctx.Locale.PrettyNumber .IssueStats.ClosedCount}}&nbsp;{{ctx.Locale.Tr "repo.issues.closed_title"}}
+-						</a>
+-					</div>
+-					<form class="list-header-search ui form ignore-dirty">
+-						<div class="ui small search fluid action input">
+-							<input type="hidden" name="type" value="{{$.ViewType}}">
+-							<input type="hidden" name="sort" value="{{$.SortType}}">
+-							<input type="hidden" name="state" value="{{$.State}}">
+-							{{template "shared/search/combo_fuzzy" dict "Value" $.Keyword "IsFuzzy" $.IsFuzzy "Placeholder" (ctx.Locale.Tr (Iif .PageIsPulls "search.pull_kind" "search.issue_kind")) "Tooltip" (ctx.Locale.Tr "explore.go_to")}}
+-						</div>
+-					</form>
+-					<!-- Sort -->
+-					<div class="list-header-sort ui small dropdown type jump item">
+-						<span class="text tw-whitespace-nowrap">
+-							{{ctx.Locale.Tr "repo.issues.filter_sort"}}
+-							{{svg "octicon-triangle-down" 14 "dropdown icon"}}
+-						</span>
+-						<div class="menu">
+-							<a class="{{if eq .SortType "recentupdate"}}active {{end}}item" href="?type={{$.ViewType}}&sort=recentupdate&state={{$.State}}&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">{{ctx.Locale.Tr "repo.issues.filter_sort.recentupdate"}}</a>
+-							<a class="{{if eq .SortType "leastupdate"}}active {{end}}item" href="?type={{$.ViewType}}&sort=leastupdate&state={{$.State}}&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">{{ctx.Locale.Tr "repo.issues.filter_sort.leastupdate"}}</a>
+-							<a class="{{if or (eq .SortType "latest") (not .SortType)}}active {{end}}item" href="?type={{$.ViewType}}&sort=latest&state={{$.State}}&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">{{ctx.Locale.Tr "repo.issues.filter_sort.latest"}}</a>
+-							<a class="{{if eq .SortType "oldest"}}active {{end}}item" href="?type={{$.ViewType}}&sort=oldest&state={{$.State}}&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">{{ctx.Locale.Tr "repo.issues.filter_sort.oldest"}}</a>
+-							<a class="{{if eq .SortType "mostcomment"}}active {{end}}item" href="?type={{$.ViewType}}&sort=mostcomment&state={{$.State}}&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">{{ctx.Locale.Tr "repo.issues.filter_sort.mostcomment"}}</a>
+-							<a class="{{if eq .SortType "leastcomment"}}active {{end}}item" href="?type={{$.ViewType}}&sort=leastcomment&state={{$.State}}&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">{{ctx.Locale.Tr "repo.issues.filter_sort.leastcomment"}}</a>
+-							<a class="{{if eq .SortType "nearduedate"}}active {{end}}item" href="?type={{$.ViewType}}&sort=nearduedate&state={{$.State}}&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">{{ctx.Locale.Tr "repo.issues.filter_sort.nearduedate"}}</a>
+-							<a class="{{if eq .SortType "farduedate"}}active {{end}}item" href="?type={{$.ViewType}}&sort=farduedate&state={{$.State}}&q={{$.Keyword}}&fuzzy={{.IsFuzzy}}">{{ctx.Locale.Tr "repo.issues.filter_sort.farduedate"}}</a>
+-						</div>
+-					</div>
+-				</div>
+-				{{template "shared/issuelist" dict "." . "listType" "dashboard"}}
+-			</div>
+-		</div>
+-	</div>
+-</div>
+-{{template "base/footer" .}}
+diff --git a/templates/user/dashboard/milestones.tmpl b/templates/user/dashboard/milestones.tmpl
+deleted file mode 100644
+index 0f1e866a21..0000000000
+--- a/templates/user/dashboard/milestones.tmpl
++++ /dev/null
+@@ -1,154 +0,0 @@
+-{{template "base/head" .}}
+-<div role="main" aria-label="{{.Title}}" class="page-content dashboard issues repository milestones">
+-	{{template "user/dashboard/navbar" .}}
+-	<div class="ui container">
+-		<div class="flex-container">
+-			<div class="flex-container-nav">
+-				<div class="ui secondary vertical filter menu tw-bg-transparent">
+-					<div class="item">
+-						{{ctx.Locale.Tr "home.issues.in_your_repos"}}
+-						<strong>{{.Total}}</strong>
+-					</div>
+-					<div class="divider"></div>
+-					{{range .Repos}}
+-						{{with $Repo := .}}
+-							<a class="{{range $.RepoIDs}}{{if eq . $Repo.ID}}active{{end}}{{end}} repo name item" href="?repos=[
+-								{{- with $include := true -}}
+-										{{- range $.RepoIDs -}}
+-											{{- if eq . $Repo.ID -}}
+-												{{$include = false}}
+-											{{- else -}}
+-												{{.}}%2C
+-											{{- end -}}
+-										{{- end -}}
+-										{{- if eq $include true -}}
+-											{{$Repo.ID}}%2C
+-										{{- end -}}
+-									{{- end -}}
+-								]&sort={{$.SortType}}&state={{$.State}}&q={{$.Keyword}}" title="{{.FullName}}">
+-								<span class="text truncate">{{$Repo.FullName}}</span>
+-								<div class="ui {{if $.IsShowClosed}}red{{else}}green{{end}} label">{{index $.Counts $Repo.ID}}</div>
+-							</a>
+-						{{end}}
+-					{{end}}
+-				</div>
+-			</div>
+-			<div class="flex-container-main content">
+-				<div class="list-header">
+-					<div class="small-menu-items ui compact tiny menu list-header-toggle">
+-						<a class="item{{if not .IsShowClosed}} active{{end}}" href="?repos=[{{range $.RepoIDs}}{{.}}%2C{{end}}]&sort={{$.SortType}}&state=open&q={{$.Keyword}}">
+-							{{svg "octicon-milestone" 16 "tw-mr-2"}}
+-							{{ctx.Locale.PrettyNumber .MilestoneStats.OpenCount}}&nbsp;{{ctx.Locale.Tr "repo.issues.open_title"}}
+-						</a>
+-						<a class="item{{if .IsShowClosed}} active{{end}}" href="?repos=[{{range $.RepoIDs}}{{.}}%2C{{end}}]&sort={{$.SortType}}&state=closed&q={{$.Keyword}}">
+-							{{svg "octicon-check" 16 "tw-mr-2"}}
+-							{{ctx.Locale.PrettyNumber .MilestoneStats.ClosedCount}}&nbsp;{{ctx.Locale.Tr "repo.issues.closed_title"}}
+-						</a>
+-					</div>
+-					<form class="list-header-search ui form ignore-dirty">
+-						<input type="hidden" name="type" value="{{$.ViewType}}">
+-							<input type="hidden" name="repos" value="[{{range $.RepoIDs}}{{.}},{{end}}]">
+-							<input type="hidden" name="sort" value="{{$.SortType}}">
+-							<input type="hidden" name="state" value="{{$.State}}">
+-						{{template "shared/search/combo" dict "Value" $.Keyword}}
+-					</form>
+-					<!-- Sort -->
+-					<div class="list-header-sort ui dropdown type jump item">
+-						<span class="text">
+-							{{ctx.Locale.Tr "repo.issues.filter_sort"}}
+-						</span>
+-						{{svg "octicon-triangle-down" 14 "dropdown icon"}}
+-						<div class="menu">
+-							<a class="{{if or (eq .SortType "closestduedate") (not .SortType)}}active {{end}}item" href="?repos=[{{range $.RepoIDs}}{{.}}%2C{{end}}]&sort=closestduedate&state={{$.State}}&q={{$.Keyword}}">{{ctx.Locale.Tr "repo.milestones.filter_sort.earliest_due_data"}}</a>
+-							<a class="{{if eq .SortType "furthestduedate"}}active {{end}}item" href="?repos=[{{range $.RepoIDs}}{{.}}%2C{{end}}]&sort=furthestduedate&state={{$.State}}&q={{$.Keyword}}">{{ctx.Locale.Tr "repo.milestones.filter_sort.latest_due_date"}}</a>
+-							<a class="{{if eq .SortType "leastcomplete"}}active {{end}}item" href="?repos=[{{range $.RepoIDs}}{{.}}%2C{{end}}]&sort=leastcomplete&state={{$.State}}&q={{$.Keyword}}">{{ctx.Locale.Tr "repo.milestones.filter_sort.least_complete"}}</a>
+-							<a class="{{if eq .SortType "mostcomplete"}}active {{end}}item" href="?repos=[{{range $.RepoIDs}}{{.}}%2C{{end}}]&sort=mostcomplete&state={{$.State}}&q={{$.Keyword}}">{{ctx.Locale.Tr "repo.milestones.filter_sort.most_complete"}}</a>
+-							<a class="{{if eq .SortType "mostissues"}}active {{end}}item" href="?repos=[{{range $.RepoIDs}}{{.}}%2C{{end}}]&sort=mostissues&state={{$.State}}&q={{$.Keyword}}">{{ctx.Locale.Tr "repo.milestones.filter_sort.most_issues"}}</a>
+-							<a class="{{if eq .SortType "leastissues"}}active {{end}}item" href="?repos=[{{range $.RepoIDs}}{{.}}%2C{{end}}]&sort=leastissues&state={{$.State}}&q={{$.Keyword}}">{{ctx.Locale.Tr "repo.milestones.filter_sort.least_issues"}}</a>
+-						</div>
+-					</div>
+-				</div>
+-				<div class="milestone-list">
+-					{{range .Milestones}}
+-						<li class="milestone-card">
+-							<div class="milestone-header">
+-								<h3 class="flex-text-block tw-m-0">
+-									<span class="ui large label">
+-										{{.Repo.FullName}}
+-									</span>
+-									{{svg "octicon-milestone" 16}}
+-									<a class="muted" href="{{.Repo.Link}}/milestone/{{.ID}}">{{.Name}}</a>
+-								</h3>
+-								<div class="tw-flex tw-items-center">
+-									<span class="tw-mr-2">{{.Completeness}}%</span>
+-									<progress value="{{.Completeness}}" max="100"></progress>
+-								</div>
+-							</div>
+-							<div class="milestone-toolbar">
+-								<div class="group">
+-									<div class="flex-text-block">
+-										{{svg "octicon-issue-opened" 14}}
+-										{{ctx.Locale.PrettyNumber .NumOpenIssues}}&nbsp;{{ctx.Locale.Tr "repo.issues.open_title"}}
+-									</div>
+-									<div class="flex-text-block">
+-										{{svg "octicon-check" 14}}
+-										{{ctx.Locale.PrettyNumber .NumClosedIssues}}&nbsp;{{ctx.Locale.Tr "repo.issues.closed_title"}}
+-									</div>
+-									{{if .TotalTrackedTime}}
+-										<div class="flex-text-block">
+-											{{svg "octicon-clock"}}
+-											{{.TotalTrackedTime|Sec2Time}}
+-										</div>
+-									{{end}}
+-									{{if .UpdatedUnix}}
+-										<div class="flex-text-block">
+-											{{svg "octicon-clock"}}
+-											{{ctx.Locale.Tr "repo.milestones.update_ago" (TimeSinceUnix .UpdatedUnix ctx.Locale)}}
+-										</div>
+-									{{end}}
+-									<div class="flex-text-block">
+-										{{if .IsClosed}}
+-											{{$closedDate:= TimeSinceUnix .ClosedDateUnix ctx.Locale}}
+-											{{svg "octicon-clock" 14}}
+-											{{ctx.Locale.Tr "repo.milestones.closed" $closedDate}}
+-										{{else}}
+-											{{if .DeadlineString}}
+-												<span{{if .IsOverdue}} class="text red"{{end}}>
+-													{{svg "octicon-calendar" 14}}
+-													{{DateTime "short" .DeadlineString}}
+-												</span>
+-											{{else}}
+-												{{svg "octicon-calendar" 14}}
+-												{{ctx.Locale.Tr "repo.milestones.no_due_date"}}
+-											{{end}}
+-										{{end}}
+-									</div>
+-								</div>
+-								{{if and (or $.CanWriteIssues $.CanWritePulls) (not $.Repository.IsArchived)}}
+-									<div class="group">
+-										<a class="flex-text-inline" href="{{$.Link}}/{{.ID}}/edit">{{svg "octicon-pencil" 14}}{{ctx.Locale.Tr "repo.issues.label_edit"}}</a>
+-										{{if .IsClosed}}
+-											<a class="link-action flex-text-inline" href data-url="{{$.Link}}/{{.ID}}/open">{{svg "octicon-check" 14}}{{ctx.Locale.Tr "repo.milestones.open"}}</a>
+-										{{else}}
+-											<a class="link-action flex-text-inline" href data-url="{{$.Link}}/{{.ID}}/close">{{svg "octicon-x" 14}}{{ctx.Locale.Tr "repo.milestones.close"}}</a>
+-										{{end}}
+-										<a class="delete-button flex-text-inline" href="#" data-url="{{$.RepoLink}}/milestones/delete" data-id="{{.ID}}">{{svg "octicon-trash" 14}}{{ctx.Locale.Tr "repo.issues.label_delete"}}</a>
+-									</div>
+-								{{end}}
+-							</div>
+-							{{if .Content}}
+-								<div class="markup content">
+-									{{.RenderedContent}}
+-								</div>
+-							{{end}}
+-						</li>
+-					{{end}}
+-
+-					{{template "base/paginate" .}}
+-				</div>
+-
+-			</div>
+-		</div>
+-	</div>
+-</div>
+-{{template "base/footer" .}}
+diff --git a/templates/user/dashboard/navbar.tmpl b/templates/user/dashboard/navbar.tmpl
+index 6e66007443..bf53832f97 100644
+--- a/templates/user/dashboard/navbar.tmpl
++++ b/templates/user/dashboard/navbar.tmpl
+@@ -1,4 +1,4 @@
+-<div class="secondary-nav tw-border-b tw-border-b-secondary">
++<div class="secondary-nav tw-border-b tw-border-b-secondary" style="position:fixed;z-index:20;width:100%;margin-top:-32px;">
+ 	<div class="ui secondary stackable menu">
+ 		<div class="item">
+ 			<div class="ui floating dropdown jump">
+diff --git a/templates/user/dashboard/repolist.tmpl b/templates/user/dashboard/repolist.tmpl
+deleted file mode 100644
+index be710675d5..0000000000
+--- a/templates/user/dashboard/repolist.tmpl
++++ /dev/null
+@@ -1,59 +0,0 @@
+-<script type="module">
+-const data = {
+-	...window.config.pageData.dashboardRepoList, // it only contains searchLimit and uid
+-
+-	isMirrorsEnabled: {{.MirrorsEnabled}},
+-	isStarsEnabled: {{not .IsDisableStars}},
+-
+-	textRepository: {{ctx.Locale.Tr "repository"}},
+-	textOrganization: {{ctx.Locale.Tr "organization"}},
+-	textMyRepos: {{ctx.Locale.Tr "home.my_repos"}},
+-	textNewRepo: {{ctx.Locale.Tr "new_repo"}},
+-	textSearchRepos: {{ctx.Locale.Tr "search.repo_kind"}},
+-	textFilter: {{ctx.Locale.Tr "home.filter"}},
+-	textShowArchived: {{ctx.Locale.Tr "home.show_archived"}},
+-	textShowPrivate: {{ctx.Locale.Tr "home.show_private"}},
+-
+-	textShowBothArchivedUnarchived: {{ctx.Locale.Tr "home.show_both_archived_unarchived"}},
+-	textShowOnlyUnarchived: {{ctx.Locale.Tr "home.show_only_unarchived"}},
+-	textShowOnlyArchived: {{ctx.Locale.Tr "home.show_only_archived"}},
+-
+-	textShowBothPrivatePublic: {{ctx.Locale.Tr "home.show_both_private_public"}},
+-	textShowOnlyPublic: {{ctx.Locale.Tr "home.show_only_public"}},
+-	textShowOnlyPrivate: {{ctx.Locale.Tr "home.show_only_private"}},
+-
+-	textAll: {{ctx.Locale.Tr "all"}},
+-	textSources: {{ctx.Locale.Tr "sources"}},
+-	textForks: {{ctx.Locale.Tr "forks"}},
+-	textMirrors: {{ctx.Locale.Tr "mirrors"}},
+-	textCollaborative: {{ctx.Locale.Tr "collaborative"}},
+-
+-	textFirstPage: {{ctx.Locale.Tr "admin.first_page"}},
+-	textPreviousPage: {{ctx.Locale.Tr "repo.issues.previous"}},
+-	textNextPage: {{ctx.Locale.Tr "repo.issues.next"}},
+-	textLastPage: {{ctx.Locale.Tr "admin.last_page"}},
+-
+-	textMyOrgs: {{ctx.Locale.Tr "home.my_orgs"}},
+-	textNewOrg: {{ctx.Locale.Tr "new_org"}},
+-
+-	textOrgVisibilityLimited: {{ctx.Locale.Tr "org.settings.visibility.limited_shortname"}},
+-	textOrgVisibilityPrivate: {{ctx.Locale.Tr "org.settings.visibility.private_shortname"}},
+-};
+-
+-{{if .Team}}
+-data.teamId = {{.Team.ID}};
+-{{end}}
+-
+-{{if not .ContextUser.IsOrganization}}
+-data.organizations = [{{range .Orgs}}{'name': {{.Name}}, 'num_repos': {{.NumRepos}}, 'org_visibility': {{.Visibility}}},{{end}}];
+-data.isOrganization = false;
+-data.organizationsTotalCount = {{.UserOrgsCount}};
+-data.canCreateOrganization = {{.SignedUser.CanCreateOrganization}};
+-{{else}}
+-data.organizationId = {{.ContextUser.ID}};
+-{{end}}
+-
+-window.config.pageData.dashboardRepoList = data;
+-</script>
+-
+-<div id="dashboard-repo-list" class="flex-container-sidebar"></div>
+diff --git a/templates/user/overview/package_versions.tmpl b/templates/user/overview/package_versions.tmpl
+index 9d9b430229..a3ee7b4f5f 100644
+--- a/templates/user/overview/package_versions.tmpl
++++ b/templates/user/overview/package_versions.tmpl
+@@ -1,5 +1,5 @@
+ {{template "base/head" .}}
+-<div class="secondary-nav tw-border-b tw-border-b-secondary container-margin">
++<div class="secondary-nav tw-border-b tw-border-b-secondary container-margin" style="position:fixed;z-index:20;width:100%;margin-top:-16px;">
+ 	<div class="ui secondary menu tw-py-3">
+ 		<a href="/explore/packages" class="orange-link">Explore</a>
+ 		<span class="tw-mx-3" style="color: #788796">/</span>
+-- 
+2.34.1
+
