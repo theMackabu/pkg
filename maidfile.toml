@@ -2,7 +2,7 @@
 patch_dir = "../patches"
 branch = "release/v1.22"
 repo = "https://github.com/go-gitea/gitea"
-commit = "578c02d6529a589dfa5470462e8ca9ab5fa4a5fc"
+# use commit 578c02d6529a589dfa5470462e8ca9ab5fa4a5fc
 
 [project]
 name = "pkg.ci"
@@ -11,7 +11,7 @@ version = "0.3.0"
 [tasks]
 clean.script = "rm -rf gitea"
 reset.script = "bash -c 'git -C gitea reset --hard HEAD && git -C gitea clean -fd'"
-clone.script = ["maid clean -q", "git clone -b %{env.branch} --single-branch %{env.repo}", "git checkout %{env.commit}"]
+clone.script = ["maid clean -q", "git clone -b %{env.branch} --single-branch %{env.repo}"]
 
 [tasks.patch]
 path = "gitea"
