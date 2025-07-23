@@ -10,6 +10,7 @@ version = "0.2.1"
 
 [tasks]
 clean.script = "rm -rf gitea"
+reset.script = "bash -c 'git reset --hard HEAD && git clean -fd'"
 clone.script = ["maid clean -q", "git clone -b %{env.branch} --single-branch %{env.repo}", "git checkout %{env.commit}"]
 
 [tasks.patch]
