@@ -6,7 +6,7 @@ commit = "578c02d6529a589dfa5470462e8ca9ab5fa4a5fc"
 
 [project]
 name = "pkg.ci"
-version = "0.2.1"
+version = "0.3.0"
 
 [tasks]
 clean.script = "rm -rf gitea"
